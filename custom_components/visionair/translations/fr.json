@@ -1,0 +1,88 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sélectionner un appareil VisionAir",
+        "description": "Sélectionnez votre appareil de ventilation VisionAir dans la liste des appareils découverts.",
+        "data": {
+          "address": "Appareil"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirmer l'appareil",
+        "description": "Voulez-vous configurer {name} ?"
+      }
+    },
+    "abort": {
+      "already_configured": "L'appareil est déjà configuré",
+      "no_devices_found": "Aucun appareil VisionAir trouvé. Assurez-vous que votre appareil est allumé et à portée Bluetooth."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options VisionAir",
+        "description": "Configurez l'intervalle de mise à jour. Des intervalles plus longs laissent plus de temps à l'application VMI pour se connecter.",
+        "data": {
+          "update_interval": "Intervalle de mise à jour"
+        }
+      }
+    }
+  },
+  "entity": {
+    "fan": {
+      "visionair": {
+        "name": "Ventilation"
+      }
+    },
+    "sensor": {
+      "airflow": {
+        "name": "Débit d'air"
+      },
+      "airflow_mode": {
+        "name": "Mode de ventilation",
+        "state": {
+          "low": "Faible",
+          "medium": "Moyen",
+          "high": "Fort",
+          "unknown": "Inconnu"
+        }
+      },
+      "configured_volume": {
+        "name": "Volume configuré"
+      },
+      "temp_remote": {
+        "name": "Température ambiante"
+      },
+      "temp_probe1": {
+        "name": "Température sortie"
+      },
+      "temp_probe2": {
+        "name": "Température entrée"
+      },
+      "humidity_remote": {
+        "name": "Humidité ambiante"
+      },
+      "filter_days": {
+        "name": "Durée de vie filtre"
+      },
+      "operating_days": {
+        "name": "Jours de fonctionnement"
+      },
+      "preheat_temp": {
+        "name": "Consigne préchauffage"
+      },
+      "summer_limit_temp": {
+        "name": "Consigne limite été"
+      }
+    },
+    "switch": {
+      "preheat": {
+        "name": "Préchauffage"
+      },
+      "summer_limit": {
+        "name": "Limite été"
+      }
+    }
+  }
+}

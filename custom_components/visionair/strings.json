@@ -1,0 +1,85 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select VisionAir Device",
+        "description": "Select your VisionAir ventilation device from the list of discovered devices.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Device",
+        "description": "Do you want to set up {name}?"
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No VisionAir devices found. Make sure your device is powered on and within Bluetooth range."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VisionAir Options",
+        "description": "Configure the update interval. Longer intervals give the VMI app more time to connect.",
+        "data": {
+          "update_interval": "Update interval"
+        }
+      }
+    }
+  },
+  "entity": {
+    "fan": {
+      "visionair": {
+        "name": "Ventilation"
+      }
+    },
+    "sensor": {
+      "airflow": {
+        "name": "Airflow"
+      },
+      "airflow_mode": {
+        "name": "Airflow mode",
+        "state": {
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High",
+          "unknown": "Unknown"
+        }
+      },
+      "configured_volume": {
+        "name": "Configured volume"
+      },
+      "temp_remote": {
+        "name": "Room temperature"
+      },
+      "temp_probe1": {
+        "name": "Outlet temperature"
+      },
+      "temp_probe2": {
+        "name": "Inlet temperature"
+      },
+      "humidity_remote": {
+        "name": "Room humidity"
+      },
+      "filter_days": {
+        "name": "Filter days remaining"
+      },
+      "operating_days": {
+        "name": "Operating days"
+      },
+      "preheat_temp": {
+        "name": "Preheat setpoint"
+      }
+    },
+    "switch": {
+      "preheat": {
+        "name": "Preheat"
+      },
+      "summer_limit": {
+        "name": "Summer limit"
+      }
+    }
+  }
+}
