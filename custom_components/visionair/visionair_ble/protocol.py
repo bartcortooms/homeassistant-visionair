@@ -10,20 +10,27 @@ Supported devices:
 
 Protocol overview:
 - All packets start with magic bytes 0xa5 0xb6
-- Packet type in byte 2: 0x01=status, 0x03=sensors, 0x10=request, 0x1a=settings, 0x23=ack
+- Packet type in byte 2: 0x01=device_state, 0x03=probe_sensors, 0x10=request, 0x1a=settings, 0x23=ack
 - Settings packets use XOR checksum (all bytes after magic, excluding final checksum byte)
 - BLE uses Cypress PSoC demo profile UUIDs (vendor reused generic UUIDs)
 - All devices advertise as "VisionAir" over BLE
 
-Important: The status packet (0x01) contains device configuration but often has stale
-temperature readings. The sensor packet (0x03) contains live/current temperature and
-humidity measurements. Always use get_sensors() for accurate temperature readings.
+Packet types:
+- DEVICE_STATE (0x01): Device config, settings, and Remote sensor data
+- PROBE_SENSORS (0x03): Current probe temperature and humidity readings
+- SCHEDULE (0x02): Time slot configuration
+- REQUEST (0x10): Commands sent to device
+- SETTINGS (0x1a): Configuration changes
+- SETTINGS_ACK (0x23): Acknowledgment of settings
+
+Note: The DEVICE_STATE packet temperatures (bytes 8/35/42) are often stale.
+Use PROBE_SENSORS packet or get_sensors() for accurate probe readings.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from enum import IntEnum
 from typing import NamedTuple
 
 
@@ -121,9 +128,9 @@ PACKET_SIZE = 11  # Standard command packet size
 class PacketType:
     """Packet types (byte 2 in all packets)."""
 
-    STATUS_RESPONSE = 0x01      # Status notification (182 bytes)
-    SCHEDULE_RESPONSE = 0x02    # Schedule data
-    SENSOR_RESPONSE = 0x03      # Sensor/history data
+    DEVICE_STATE = 0x01         # Device config + Remote sensor (182 bytes)
+    SCHEDULE = 0x02             # Time slot schedule data
+    PROBE_SENSORS = 0x03        # Probe sensor readings (182 bytes)
     REQUEST = 0x10              # Request command
     SETTINGS = 0x1A             # Settings command
     SETTINGS_ACK = 0x23         # Settings acknowledgment
@@ -135,12 +142,12 @@ class PacketType:
 class RequestParam:
     """Request parameters (byte 5 in 0x10 request packets)."""
 
-    STATUS = 0x03               # Request status
-    FULL_DATA = 0x06            # Request all data (STATUS + SCHEDULE + HISTORY)
-    HISTORY = 0x07              # Request sensor history
+    DEVICE_STATE = 0x03         # Request device state + Remote sensor
+    FULL_DATA = 0x06            # Request all data (DEVICE_STATE + SCHEDULE + PROBE_SENSORS)
+    PROBE_SENSORS = 0x07        # Request probe sensor readings
     SENSOR_SELECT = 0x18        # Set sensor cycle
     BOOST = 0x19                # Activate BOOST
-    HOLIDAY_DAYS = 0x1A         # Query holiday days remaining
+    REQUEST_1A = 0x1A           # Holiday value request in current VMI workflow
     HOLIDAY_STATUS = 0x2C       # Query holiday mode status
 
 
@@ -153,16 +160,19 @@ class SettingsMode:
     SCHEDULE = 0x05             # Schedule on/off
 
 
-class AirflowLevel:
-    """Airflow mode protocol values.
+class AirflowLevel(IntEnum):
+    """Airflow mode identifiers.
 
-    These are internal protocol identifiers, NOT actual m³/h values.
-    The actual m³/h is calculated from configured_volume × ACH rate.
+    These are abstract identifiers for airflow modes, not actual m³/h values.
+    The actual m³/h is calculated from configured_volume × ACH rate:
+    - LOW: volume × 0.36
+    - MEDIUM: volume × 0.45
+    - HIGH: volume × 0.55
     """
 
-    LOW = 131       # Protocol identifier for LOW mode
-    MEDIUM = 164    # Protocol identifier for MEDIUM mode
-    HIGH = 201      # Protocol identifier for HIGH mode
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
 
 
 # Backward compatibility aliases
@@ -171,16 +181,21 @@ AIRFLOW_MEDIUM = AirflowLevel.MEDIUM
 AIRFLOW_HIGH = AirflowLevel.HIGH
 
 
-class StatusOffset:
-    """Field offsets in status response packet (type 0x01, 182 bytes)."""
+class DeviceStateOffset:
+    """Field offsets in device state packet (type 0x01, 182 bytes).
+
+    This packet contains device configuration, settings, and Remote sensor data.
+    Probe temperatures here (bytes 35, 42) are often stale - use PROBE_SENSORS packet.
+    """
 
     TYPE = 2
-    DEVICE_ID = 4               # 4 bytes, little-endian
-    HUMIDITY = 4                # Humidity % from remote
-    TEMP_REMOTE = 8             # Room temperature (from remote)
+    HUMIDITY = 4                # Humidity % from remote (1 byte)
+    UNKNOWN_5_7 = 5             # Constant per device (3 bytes) - possibly device identifier
+    UNKNOWN_8 = 8               # Always 18 in captures - NOT live temp (see TEMP_ACTIVE)
     CONFIGURED_VOLUME = 22      # 2 bytes, little-endian
     OPERATING_DAYS = 26         # 2 bytes, little-endian
     FILTER_DAYS = 28            # 2 bytes, little-endian
+    TEMP_ACTIVE = 32            # Live temp for selected sensor (per SENSOR_SELECTOR)
     SENSOR_SELECTOR = 34        # Current sensor source (0/1/2)
     TEMP_PROBE1 = 35            # Outlet temp (may be stale)
     SUMMER_LIMIT_TEMP = 38
@@ -192,13 +207,13 @@ class StatusOffset:
     PREHEAT_TEMP = 56
 
 
-class SensorOffset:
-    """Field offsets in sensor response packet (type 0x03)."""
+class ProbeSensorOffset:
+    """Field offsets in probe sensors packet (type 0x03)."""
 
     TYPE = 2
-    TEMP_PROBE1 = 6             # Outlet temperature (live)
+    TEMP_PROBE1 = 6             # Outlet temperature
     HUMIDITY_PROBE1 = 8         # Outlet humidity
-    TEMP_PROBE2 = 11            # Inlet temperature (live)
+    TEMP_PROBE2 = 11            # Inlet temperature
     FILTER_PERCENT = 13         # Filter remaining %
 
 
@@ -265,13 +280,16 @@ class AirflowBytes(NamedTuple):
 
 @dataclass
 class DeviceStatus:
-    """Device status from status packet (type 0x01).
+    """Device state from DEVICE_STATE packet (type 0x01).
+
+    Contains device configuration, settings, and Remote sensor readings.
+    Probe temperatures here are often stale - use SensorData from PROBE_SENSORS packet.
 
     Fields with sensor metadata will be auto-discovered by the HA integration.
     """
 
     # Internal fields (no sensor metadata)
-    device_id: int
+    device_id: int  # Bytes 5-7, constant per device (not a true ID, just a unique-ish value)
     airflow_indicator: int
     sensor_selector: int
     sensor_name: str
@@ -342,10 +360,10 @@ class DeviceStatus:
 
 @dataclass
 class SensorData:
-    """Live sensor data from measurement packet (type 0x03).
+    """Probe sensor data from PROBE_SENSORS packet (type 0x03).
 
-    This packet contains the most current temperature and humidity readings.
-    The status packet (0x01) temperatures are often stale/cached.
+    Contains current/live temperature and humidity readings from probes.
+    The DEVICE_STATE packet (0x01) temperatures are often stale.
     """
 
     temp_probe1: int | None = field(default=None, metadata=sensor(
@@ -433,21 +451,25 @@ def build_request(param: int, value: int = 0, extended: bool = False) -> bytes:
 
 
 def build_status_request() -> bytes:
-    """Build a status request packet.
+    """Build a device state request packet.
+
+    Requests DEVICE_STATE packet (type 0x01) with device config and Remote sensor.
 
     Returns:
         Complete packet bytes: a5b6100005030000000016
     """
-    return build_request(RequestParam.STATUS)
+    return build_request(RequestParam.DEVICE_STATE)
 
 
 def build_sensor_request() -> bytes:
-    """Build a sensor/measurement request packet.
+    """Build a probe sensors request packet.
+
+    Requests PROBE_SENSORS packet (type 0x03) with current probe readings.
 
     Returns:
         Complete packet bytes: a5b6100605070000000014
     """
-    return build_request(RequestParam.HISTORY, extended=True)
+    return build_request(RequestParam.PROBE_SENSORS, extended=True)
 
 
 def build_full_data_request() -> bytes:
@@ -455,9 +477,9 @@ def build_full_data_request() -> bytes:
 
     This triggers the device to send a sequence of responses:
     - SETTINGS_ACK (0x23)
-    - STATUS (0x01)
-    - SCHEDULE (0x02)
-    - SENSOR/HISTORY (0x03)
+    - DEVICE_STATE (0x01) - device config + Remote sensor
+    - SCHEDULE (0x02) - time slot configuration
+    - PROBE_SENSORS (0x03) - current probe readings
 
     This is the request pattern used by the VMI app for polling.
 
@@ -512,14 +534,14 @@ def build_boost_command(enable: bool) -> bytes:
 # ⚠️  EXPERIMENTAL - Protocol understanding is incomplete!
 #
 # What we know:
-# - All special modes use Settings command with byte 7 = 0x04
-# - Bytes 8-9-10 encode HH:MM:SS timestamp
-# - Holiday mode: days are set via query 0x1a before activation
+# - Current Holiday workflow uses REQUEST param 0x1a with value in byte 9
+# - OFF/clear is sent as REQUEST param 0x1a with value 0x00
+# - Holiday status query uses REQUEST param 0x2c
 #
 # What we DON'T know:
-# - How the device distinguishes Holiday vs Night Vent vs Fixed Air Flow
-# - How to deactivate special modes (no OFF packets captured)
-# - Whether Night Vent and Fixed Air Flow require different preceding queries
+# - Whether a separate ON-activation packet exists beyond value-setting
+# - Night Ventilation / Fixed Air Flow packet mapping
+# - Full decoding of Holiday status (type 0x50)
 #
 # These functions require _experimental=True flag to acknowledge the risks.
 
@@ -540,17 +562,13 @@ def _require_experimental(flag: bool, feature: str) -> None:
         )
 
 
-def build_holiday_days_query(days: int, *, _experimental: bool = False) -> bytes:
-    """Build query to set Holiday mode duration.
+def build_request_1a(*, _experimental: bool = False) -> bytes:
+    """Build Holiday value request (request param 0x1a).
 
-    ⚠️  EXPERIMENTAL: Holiday mode activation sequence is not fully verified.
-    We don't know how to deactivate Holiday mode once activated.
-
-    This should be sent before build_holiday_activate() to set
-    the number of days the device will run in Holiday mode.
+    ⚠️  EXPERIMENTAL: Confirmed in current VMI workflow for Holiday day value
+    updates and clear/off (value 0). Broader behavior is still not fully decoded.
 
     Args:
-        days: Number of days (typically 1-30)
         _experimental: Must be True to use this function
 
     Returns:
@@ -559,8 +577,8 @@ def build_holiday_days_query(days: int, *, _experimental: bool = False) -> bytes
     Raises:
         ExperimentalFeatureError: If _experimental is not True
     """
-    _require_experimental(_experimental, "Holiday mode")
-    return build_request(RequestParam.HOLIDAY_DAYS, value=days, extended=True)
+    _require_experimental(_experimental, "Request 0x1a")
+    return build_request(RequestParam.REQUEST_1A, extended=True)
 
 
 def build_holiday_status_query() -> bytes:
@@ -575,33 +593,13 @@ def build_holiday_status_query() -> bytes:
     return build_request(RequestParam.HOLIDAY_STATUS, extended=True)
 
 
-def _build_special_mode_command(preheat_enabled: bool = True) -> bytes:
-    """Build a special mode activation command (internal use).
-
-    This is the shared packet structure for Holiday, Night Ventilation,
-    and Fixed Air Flow modes. The command includes the current time
-    as HH:MM:SS timestamp in bytes 8-9-10.
-
-    Args:
-        preheat_enabled: Whether to enable preheat during the mode
-
-    Returns:
-        Complete packet bytes
-    """
-    now = datetime.now()
-    payload = bytes([
-        PacketType.SETTINGS,
-        0x06,
-        0x06,
-        0x1A,
-        0x02 if preheat_enabled else 0x00,  # byte 6: preheat
-        SettingsMode.SPECIAL_MODE,           # byte 7: special mode flag
-        now.hour,                            # byte 8: hour
-        now.minute,                          # byte 9: minute
-        now.second,                          # byte 10: second
-    ])
-    checksum = calc_checksum(payload)
-    return MAGIC + payload + bytes([checksum])
+def _raise_special_mode_unsupported(feature: str, *, _experimental: bool) -> None:
+    _require_experimental(_experimental, feature)
+    raise ExperimentalFeatureError(
+        f"{feature} encoding is unknown. "
+        "Byte 8 is a sequence counter and bytes 9-10 are mode-specific. "
+        "We cannot generate valid packets without the encoding algorithm."
+    )
 
 
 def build_holiday_activate(
@@ -609,11 +607,8 @@ def build_holiday_activate(
 ) -> list[bytes]:
     """Build complete Holiday mode activation sequence.
 
-    ⚠️  EXPERIMENTAL: We don't know how to deactivate Holiday mode once activated.
-
-    Returns a list of packets that should be sent in order:
-    1. Days query to set duration
-    2. Special mode command to activate
+    ⚠️  EXPERIMENTAL: The Holiday mode encoding is not known.
+    This function is intentionally unsupported until the algorithm is decoded.
 
     Args:
         days: Number of days for Holiday mode (typically 1-30)
@@ -626,11 +621,8 @@ def build_holiday_activate(
     Raises:
         ExperimentalFeatureError: If _experimental is not True
     """
-    _require_experimental(_experimental, "Holiday mode")
-    return [
-        build_holiday_days_query(days, _experimental=True),
-        _build_special_mode_command(preheat_enabled),
-    ]
+    _raise_special_mode_unsupported("Holiday mode", _experimental=_experimental)
+    return []
 
 
 def build_night_ventilation_activate(
@@ -638,9 +630,8 @@ def build_night_ventilation_activate(
 ) -> bytes:
     """Build Night Ventilation mode activation command.
 
-    ⚠️  EXPERIMENTAL: We don't know how the device distinguishes this from
-    Holiday mode or Fixed Air Flow. The packet structure appears identical.
-    We also don't know how to deactivate this mode.
+    ⚠️  EXPERIMENTAL: Encoding is unknown. Byte 8 is a sequence counter and
+    bytes 9-10 are mode-specific.
 
     Args:
         preheat_enabled: Whether to enable preheat during the mode
@@ -652,8 +643,8 @@ def build_night_ventilation_activate(
     Raises:
         ExperimentalFeatureError: If _experimental is not True
     """
-    _require_experimental(_experimental, "Night Ventilation mode")
-    return _build_special_mode_command(preheat_enabled)
+    _raise_special_mode_unsupported("Night Ventilation mode", _experimental=_experimental)
+    return b""
 
 
 def build_fixed_airflow_activate(
@@ -661,9 +652,8 @@ def build_fixed_airflow_activate(
 ) -> bytes:
     """Build Fixed Air Flow mode activation command.
 
-    ⚠️  EXPERIMENTAL: We don't know how the device distinguishes this from
-    Holiday mode or Night Ventilation. The packet structure appears identical.
-    We also don't know how to deactivate this mode.
+    ⚠️  EXPERIMENTAL: Encoding is unknown. Byte 8 is a sequence counter and
+    bytes 9-10 are mode-specific.
 
     Args:
         preheat_enabled: Whether to enable preheat during the mode
@@ -675,8 +665,8 @@ def build_fixed_airflow_activate(
     Raises:
         ExperimentalFeatureError: If _experimental is not True
     """
-    _require_experimental(_experimental, "Fixed Air Flow mode")
-    return _build_special_mode_command(preheat_enabled)
+    _raise_special_mode_unsupported("Fixed Air Flow mode", _experimental=_experimental)
+    return b""
 
 
 def build_settings_packet(
@@ -725,19 +715,19 @@ def build_settings_packet(
 
 
 def parse_status(data: bytes) -> DeviceStatus | None:
-    """Parse status notification packet (type 0x01).
+    """Parse device state packet (type 0x01).
 
     Args:
-        data: Raw packet bytes from status notification (182 bytes)
+        data: Raw packet bytes from DEVICE_STATE notification (182 bytes)
 
     Returns:
         DeviceStatus object or None if packet is invalid
     """
-    if len(data) < 61 or data[:2] != MAGIC or data[StatusOffset.TYPE] != PacketType.STATUS_RESPONSE:
+    if len(data) < 61 or data[:2] != MAGIC or data[DeviceStateOffset.TYPE] != PacketType.DEVICE_STATE:
         return None
 
-    airflow_indicator = data[StatusOffset.AIRFLOW_INDICATOR]
-    sensor_selector = data[StatusOffset.SENSOR_SELECTOR]
+    airflow_indicator = data[DeviceStateOffset.AIRFLOW_INDICATOR]
+    sensor_selector = data[DeviceStateOffset.SENSOR_SELECTOR]
     sensor_name = SENSOR_NAMES.get(sensor_selector, f"Unknown ({sensor_selector})")
 
     # Configured volume from bytes 22-23 (little-endian uint16)
@@ -745,9 +735,9 @@ def parse_status(data: bytes) -> DeviceStatus | None:
     airflow_low = None
     airflow_medium = None
     airflow_high = None
-    if len(data) >= StatusOffset.CONFIGURED_VOLUME + 2:
+    if len(data) >= DeviceStateOffset.CONFIGURED_VOLUME + 2:
         configured_volume = int.from_bytes(
-            data[StatusOffset.CONFIGURED_VOLUME:StatusOffset.CONFIGURED_VOLUME + 2], "little"
+            data[DeviceStateOffset.CONFIGURED_VOLUME:DeviceStateOffset.CONFIGURED_VOLUME + 2], "little"
         )
         if configured_volume > 0:
             # Calculate actual airflow values based on volume and ACH rates
@@ -756,34 +746,36 @@ def parse_status(data: bytes) -> DeviceStatus | None:
             airflow_high = round(configured_volume * 0.55)
 
     # Determine current airflow mode and value from indicator
+    # airflow is 0 if configured_volume is unavailable (we can't calculate m³/h)
     airflow_mode = "unknown"
     airflow = 0
     if airflow_indicator == AirflowIndicator.LOW:
         airflow_mode = "low"
-        airflow = airflow_low or AirflowLevel.LOW
+        airflow = airflow_low or 0
     elif airflow_indicator == AirflowIndicator.MEDIUM:
         airflow_mode = "medium"
-        airflow = airflow_medium or AirflowLevel.MEDIUM
+        airflow = airflow_medium or 0
     elif airflow_indicator == AirflowIndicator.HIGH:
         airflow_mode = "high"
-        airflow = airflow_high or AirflowLevel.HIGH
+        airflow = airflow_high or 0
 
     # Humidity from remote
-    humidity = data[StatusOffset.HUMIDITY] if len(data) > StatusOffset.HUMIDITY else None
+    humidity = data[DeviceStateOffset.HUMIDITY] if len(data) > DeviceStateOffset.HUMIDITY else None
 
     # Equipment life fields (little-endian uint16)
     filter_days = None
     operating_days = None
-    if len(data) >= StatusOffset.FILTER_DAYS + 2:
+    if len(data) >= DeviceStateOffset.FILTER_DAYS + 2:
         filter_days = int.from_bytes(
-            data[StatusOffset.FILTER_DAYS:StatusOffset.FILTER_DAYS + 2], "little"
+            data[DeviceStateOffset.FILTER_DAYS:DeviceStateOffset.FILTER_DAYS + 2], "little"
         )
         operating_days = int.from_bytes(
-            data[StatusOffset.OPERATING_DAYS:StatusOffset.OPERATING_DAYS + 2], "little"
+            data[DeviceStateOffset.OPERATING_DAYS:DeviceStateOffset.OPERATING_DAYS + 2], "little"
         )
 
     return DeviceStatus(
-        device_id=int.from_bytes(data[StatusOffset.DEVICE_ID:StatusOffset.DEVICE_ID + 4], "little"),
+        # Bytes 5-7 are constant per device, use as pseudo-identifier (3 bytes, LE)
+        device_id=int.from_bytes(data[DeviceStateOffset.UNKNOWN_5_7:DeviceStateOffset.UNKNOWN_5_7 + 3], "little"),
         configured_volume=configured_volume,
         airflow=airflow,
         airflow_low=airflow_low,
@@ -791,16 +783,27 @@ def parse_status(data: bytes) -> DeviceStatus | None:
         airflow_high=airflow_high,
         airflow_indicator=airflow_indicator,
         airflow_mode=airflow_mode,
-        preheat_enabled=data[StatusOffset.PREHEAT_ENABLED] != 0x00,
-        summer_limit_enabled=data[StatusOffset.SUMMER_LIMIT_ENABLED] != 0x00,
-        summer_limit_temp=data[StatusOffset.SUMMER_LIMIT_TEMP] if len(data) > StatusOffset.SUMMER_LIMIT_TEMP else None,
-        preheat_temp=data[StatusOffset.PREHEAT_TEMP],
-        boost_active=data[StatusOffset.BOOST_ACTIVE] == 0x01 if len(data) > StatusOffset.BOOST_ACTIVE else False,
+        preheat_enabled=data[DeviceStateOffset.PREHEAT_ENABLED] != 0x00,
+        summer_limit_enabled=data[DeviceStateOffset.SUMMER_LIMIT_ENABLED] != 0x00,
+        summer_limit_temp=data[DeviceStateOffset.SUMMER_LIMIT_TEMP] if len(data) > DeviceStateOffset.SUMMER_LIMIT_TEMP else None,
+        preheat_temp=data[DeviceStateOffset.PREHEAT_TEMP],
+        boost_active=data[DeviceStateOffset.BOOST_ACTIVE] == 0x01 if len(data) > DeviceStateOffset.BOOST_ACTIVE else False,
         sensor_selector=sensor_selector,
         sensor_name=sensor_name,
-        temp_remote=data[StatusOffset.TEMP_REMOTE] if len(data) > StatusOffset.TEMP_REMOTE else None,
-        temp_probe1=data[StatusOffset.TEMP_PROBE1] if len(data) > StatusOffset.TEMP_PROBE1 else None,
-        temp_probe2=data[StatusOffset.TEMP_PROBE2] if len(data) > StatusOffset.TEMP_PROBE2 else None,
+        # Use live temperature from byte 32 only when that sensor is selected.
+        # DEVICE_STATE packet bytes 8/35/42 are stale - use get_sensors() for accurate readings.
+        temp_remote=(
+            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 2 and len(data) > DeviceStateOffset.TEMP_ACTIVE
+            else None
+        ),
+        temp_probe1=(
+            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 1 and len(data) > DeviceStateOffset.TEMP_ACTIVE
+            else None
+        ),
+        temp_probe2=(
+            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 0 and len(data) > DeviceStateOffset.TEMP_ACTIVE
+            else None
+        ),
         humidity_remote=humidity,
         filter_days=filter_days,
         operating_days=operating_days,
@@ -808,22 +811,22 @@ def parse_status(data: bytes) -> DeviceStatus | None:
 
 
 def parse_sensors(data: bytes) -> SensorData | None:
-    """Parse sensor/measurement packet (type 0x03).
+    """Parse probe sensors packet (type 0x03).
 
     Args:
-        data: Raw packet bytes from sensor notification (182 bytes)
+        data: Raw packet bytes from PROBE_SENSORS notification (182 bytes)
 
     Returns:
         SensorData object or None if packet is invalid
     """
-    if len(data) < 14 or data[:2] != MAGIC or data[SensorOffset.TYPE] != PacketType.SENSOR_RESPONSE:
+    if len(data) < 14 or data[:2] != MAGIC or data[ProbeSensorOffset.TYPE] != PacketType.PROBE_SENSORS:
         return None
 
     return SensorData(
-        temp_probe1=data[SensorOffset.TEMP_PROBE1] if len(data) > SensorOffset.TEMP_PROBE1 else None,
-        temp_probe2=data[SensorOffset.TEMP_PROBE2] if len(data) > SensorOffset.TEMP_PROBE2 else None,
-        humidity_probe1=data[SensorOffset.HUMIDITY_PROBE1] if len(data) > SensorOffset.HUMIDITY_PROBE1 else None,
-        filter_percent=data[SensorOffset.FILTER_PERCENT] if len(data) > SensorOffset.FILTER_PERCENT else None,
+        temp_probe1=data[ProbeSensorOffset.TEMP_PROBE1] if len(data) > ProbeSensorOffset.TEMP_PROBE1 else None,
+        temp_probe2=data[ProbeSensorOffset.TEMP_PROBE2] if len(data) > ProbeSensorOffset.TEMP_PROBE2 else None,
+        humidity_probe1=data[ProbeSensorOffset.HUMIDITY_PROBE1] if len(data) > ProbeSensorOffset.HUMIDITY_PROBE1 else None,
+        filter_percent=data[ProbeSensorOffset.FILTER_PERCENT] if len(data) > ProbeSensorOffset.FILTER_PERCENT else None,
     )
 
 
