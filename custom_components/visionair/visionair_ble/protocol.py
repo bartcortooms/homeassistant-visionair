@@ -23,6 +23,7 @@ humidity measurements. Always use get_sensors() for accurate temperature reading
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import NamedTuple
 
 
@@ -235,6 +236,7 @@ class DeviceStatus:
     ))
 
 
+
 @dataclass
 class SensorData:
     """Live sensor data from measurement packet (type 0x03).
@@ -306,19 +308,32 @@ def build_sensor_request() -> bytes:
     return bytes.fromhex("a5b6100605070000000014")
 
 
-def build_sensor_cycle_request() -> bytes:
-    """Build an extended status request that cycles through sensors.
+def build_sensor_select_request(sensor: int) -> bytes:
+    """Build a request to get fresh data for a specific sensor.
 
-    Each time this command is sent, the device cycles to the next sensor
-    (Probe2 → Remote → Probe1 → Probe2 → ...) and returns fresh data for
-    that sensor in the "active sensor" bytes (32 = temp, 60 = humidity).
+    The response will have byte 34 (sensor_selector) matching the requested
+    sensor, and bytes 32/60 will contain fresh temperature/humidity.
 
-    To get fresh readings for all sensors, send this command 3 times.
+    To get fresh readings for all sensors, call this with 0, 1, and 2.
+
+    Args:
+        sensor: Sensor to read:
+            0 = Probe 2 (Air inlet)
+            1 = Probe 1 (Resistor outlet)
+            2 = Remote Control
 
     Returns:
-        Complete packet bytes: a5b6100605180000000209
+        Complete packet bytes
+
+    Raises:
+        ValueError: If sensor is not 0, 1, or 2
     """
-    return bytes.fromhex("a5b6100605180000000209")
+    if sensor not in (0, 1, 2):
+        raise ValueError("sensor must be 0 (Probe2), 1 (Probe1), or 2 (Remote)")
+
+    payload = bytes([0x10, 0x06, 0x05, 0x18, 0x00, 0x00, 0x00, sensor])
+    checksum = calc_checksum(payload)
+    return MAGIC + payload + bytes([checksum])
 
 
 def build_boost_command(enable: bool) -> bytes:
@@ -334,6 +349,182 @@ def build_boost_command(enable: bool) -> bytes:
         return bytes.fromhex("a5b610060519000000010b")
     else:
         return bytes.fromhex("a5b610060519000000000a")
+
+
+# =============================================================================
+# Special Modes (Holiday, Night Ventilation, Fixed Air Flow)
+# =============================================================================
+#
+# ⚠️  EXPERIMENTAL - Protocol understanding is incomplete!
+#
+# What we know:
+# - All special modes use Settings command with byte 7 = 0x04
+# - Bytes 8-9-10 encode HH:MM:SS timestamp
+# - Holiday mode: days are set via query 0x1a before activation
+#
+# What we DON'T know:
+# - How the device distinguishes Holiday vs Night Vent vs Fixed Air Flow
+# - How to deactivate special modes (no OFF packets captured)
+# - Whether Night Vent and Fixed Air Flow require different preceding queries
+#
+# These functions require _experimental=True flag to acknowledge the risks.
+
+
+class ExperimentalFeatureError(Exception):
+    """Raised when experimental features are used without explicit opt-in."""
+
+    pass
+
+
+def _require_experimental(flag: bool, feature: str) -> None:
+    """Raise if experimental flag is not set."""
+    if not flag:
+        raise ExperimentalFeatureError(
+            f"{feature} is experimental and may not work correctly. "
+            f"Pass _experimental=True to acknowledge the risks. "
+            f"See docs/protocol.md for details on what is unknown."
+        )
+
+
+def build_holiday_days_query(days: int, *, _experimental: bool = False) -> bytes:
+    """Build query to set Holiday mode duration.
+
+    ⚠️  EXPERIMENTAL: Holiday mode activation sequence is not fully verified.
+    We don't know how to deactivate Holiday mode once activated.
+
+    This should be sent before build_holiday_activate() to set
+    the number of days the device will run in Holiday mode.
+
+    Args:
+        days: Number of days (typically 1-30)
+        _experimental: Must be True to use this function
+
+    Returns:
+        Complete packet bytes
+
+    Raises:
+        ExperimentalFeatureError: If _experimental is not True
+    """
+    _require_experimental(_experimental, "Holiday mode")
+    payload = bytes([0x10, 0x06, 0x05, 0x1A, 0x00, 0x00, 0x00, days])
+    checksum = calc_checksum(payload)
+    return MAGIC + payload + bytes([checksum])
+
+
+def build_holiday_status_query() -> bytes:
+    """Build query to get Holiday mode status.
+
+    Returns type 0x50 response with current Holiday mode state.
+    Note: Parsing of the 0x50 response is not yet implemented.
+
+    Returns:
+        Complete packet bytes
+    """
+    return bytes.fromhex("a5b61006052c000000003f")
+
+
+def _build_special_mode_command(preheat_enabled: bool = True) -> bytes:
+    """Build a special mode activation command (internal use).
+
+    This is the shared packet structure for Holiday, Night Ventilation,
+    and Fixed Air Flow modes. The command includes the current time
+    as HH:MM:SS timestamp in bytes 8-9-10.
+
+    Args:
+        preheat_enabled: Whether to enable preheat during the mode
+
+    Returns:
+        Complete packet bytes
+    """
+    now = datetime.now()
+    payload = bytes([
+        0x1A,
+        0x06,
+        0x06,
+        0x1A,
+        0x02 if preheat_enabled else 0x00,  # byte 6: preheat
+        0x04,                                # byte 7: special mode flag
+        now.hour,                            # byte 8: hour
+        now.minute,                          # byte 9: minute
+        now.second,                          # byte 10: second
+    ])
+    checksum = calc_checksum(payload)
+    return MAGIC + payload + bytes([checksum])
+
+
+def build_holiday_activate(
+    days: int, preheat_enabled: bool = True, *, _experimental: bool = False
+) -> list[bytes]:
+    """Build complete Holiday mode activation sequence.
+
+    ⚠️  EXPERIMENTAL: We don't know how to deactivate Holiday mode once activated.
+
+    Returns a list of packets that should be sent in order:
+    1. Days query to set duration
+    2. Special mode command to activate
+
+    Args:
+        days: Number of days for Holiday mode (typically 1-30)
+        preheat_enabled: Whether to enable preheat during Holiday
+        _experimental: Must be True to use this function
+
+    Returns:
+        List of packet bytes to send in sequence
+
+    Raises:
+        ExperimentalFeatureError: If _experimental is not True
+    """
+    _require_experimental(_experimental, "Holiday mode")
+    return [
+        build_holiday_days_query(days, _experimental=True),
+        _build_special_mode_command(preheat_enabled),
+    ]
+
+
+def build_night_ventilation_activate(
+    preheat_enabled: bool = True, *, _experimental: bool = False
+) -> bytes:
+    """Build Night Ventilation mode activation command.
+
+    ⚠️  EXPERIMENTAL: We don't know how the device distinguishes this from
+    Holiday mode or Fixed Air Flow. The packet structure appears identical.
+    We also don't know how to deactivate this mode.
+
+    Args:
+        preheat_enabled: Whether to enable preheat during the mode
+        _experimental: Must be True to use this function
+
+    Returns:
+        Complete packet bytes
+
+    Raises:
+        ExperimentalFeatureError: If _experimental is not True
+    """
+    _require_experimental(_experimental, "Night Ventilation mode")
+    return _build_special_mode_command(preheat_enabled)
+
+
+def build_fixed_airflow_activate(
+    preheat_enabled: bool = True, *, _experimental: bool = False
+) -> bytes:
+    """Build Fixed Air Flow mode activation command.
+
+    ⚠️  EXPERIMENTAL: We don't know how the device distinguishes this from
+    Holiday mode or Night Ventilation. The packet structure appears identical.
+    We also don't know how to deactivate this mode.
+
+    Args:
+        preheat_enabled: Whether to enable preheat during the mode
+        _experimental: Must be True to use this function
+
+    Returns:
+        Complete packet bytes
+
+    Raises:
+        ExperimentalFeatureError: If _experimental is not True
+    """
+    _require_experimental(_experimental, "Fixed Air Flow mode")
+    return _build_special_mode_command(preheat_enabled)
 
 
 def build_settings_packet(
