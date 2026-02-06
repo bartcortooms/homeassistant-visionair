@@ -95,6 +95,14 @@
       },
       "boost_active": {
         "name": "Boost actif"
+      },
+      "holiday_days": {
+        "name": "Jours de vacances restants"
+      }
+    },
+    "number": {
+      "holiday_days": {
+        "name": "Mode vacances"
       }
     },
     "switch": {
