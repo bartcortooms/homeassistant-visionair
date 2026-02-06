@@ -3,11 +3,13 @@
 # Run from the homeassistant-visionair repo root
 #
 # WORKFLOW:
-#   1. Make changes in ../visionair-ble/src/visionair_ble/
-#   2. Run tests in visionair-ble: cd ../visionair-ble && pytest
+#   1. Make changes in the visionair-ble repo (src/visionair_ble/)
+#   2. Run tests: cd <visionair-ble> && uv run pytest
 #   3. Commit changes in visionair-ble
 #   4. Run this script: ./scripts/sync_visionair_ble.sh
 #   5. Commit changes in homeassistant-visionair
+#
+# Set LIB_REPO to override the default source path (../visionair-ble).
 
 set -e
 
