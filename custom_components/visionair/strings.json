@@ -84,17 +84,8 @@
       "humidity_probe1": {
         "name": "Outlet humidity"
       },
-      "preheat_enabled": {
-        "name": "Preheat enabled"
-      },
-      "summer_limit_enabled": {
-        "name": "Summer limit enabled"
-      },
       "summer_limit_temp": {
         "name": "Summer limit setpoint"
-      },
-      "boost_active": {
-        "name": "Boost active"
       }
     },
     "switch": {
