@@ -72,7 +72,6 @@ async def async_setup_entry(
             coordinator=coordinator,
             entry=entry,
             field_name=field_info.name,
-            name=meta.get("name", field_info.name),
             unit=UNIT_MAP.get(meta.get("unit"), meta.get("unit")),
             device_class=DEVICE_CLASS_MAP.get(meta.get("device_class")),
             state_class=STATE_CLASS_MAP.get(meta.get("state_class")),
@@ -94,7 +93,6 @@ class VisionAirSensor(CoordinatorEntity[VisionAirCoordinator], SensorEntity):
         coordinator: VisionAirCoordinator,
         entry: ConfigEntry,
         field_name: str,
-        name: str,
         unit: str | None,
         device_class: SensorDeviceClass | None,
         state_class: SensorStateClass | None,
@@ -105,7 +103,7 @@ class VisionAirSensor(CoordinatorEntity[VisionAirCoordinator], SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._field_name = field_name
-        self._attr_name = name  # Use name from library metadata
+        self._attr_translation_key = field_name
         self._attr_unique_id = f"{entry.data['address']}_{field_name}"
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class

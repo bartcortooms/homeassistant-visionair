@@ -72,8 +72,29 @@
       "preheat_temp": {
         "name": "Consigne préchauffage"
       },
+      "airflow_low": {
+        "name": "Débit faible"
+      },
+      "airflow_medium": {
+        "name": "Débit moyen"
+      },
+      "airflow_high": {
+        "name": "Débit fort"
+      },
+      "humidity_probe1": {
+        "name": "Humidité sortie"
+      },
+      "preheat_enabled": {
+        "name": "Préchauffage activé"
+      },
+      "summer_limit_enabled": {
+        "name": "Limite été activée"
+      },
       "summer_limit_temp": {
         "name": "Consigne limite été"
+      },
+      "boost_active": {
+        "name": "Boost actif"
       }
     },
     "switch": {
