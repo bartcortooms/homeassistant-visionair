@@ -108,8 +108,8 @@ class VisionAirCoordinator(DataUpdateCoordinator[DeviceStatus]):
         except BleakError as err:
             raise UpdateFailed(f"Error setting boost: {err}") from err
 
-    async def async_set_preheat(self, enabled: bool, temperature: int | None = None) -> None:
-        """Set preheat settings."""
+    async def async_set_preheat(self, enabled: bool) -> None:
+        """Set preheat on/off."""
         ble_device = bluetooth.async_ble_device_from_address(
             self.hass, self.address, connectable=True
         )
@@ -119,8 +119,7 @@ class VisionAirCoordinator(DataUpdateCoordinator[DeviceStatus]):
         try:
             async with BleakClient(ble_device) as client:
                 visionair = VisionAirClient(client)
-                # Use returned status directly instead of separate refresh
-                new_status = await visionair.set_preheat(enabled, temperature)
+                new_status = await visionair.set_preheat(enabled)
                 self.async_set_updated_data(new_status)
         except BleakError as err:
             raise UpdateFailed(f"Error setting preheat: {err}") from err
