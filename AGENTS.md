@@ -53,3 +53,7 @@ uv run pytest -m e2e -v    # Run e2e tests (requires real device)
 ```
 
 E2E tests require an actual VisionAir device and are skipped by default.
+
+## Code Style
+
+- **Write for newcomers, not historians.** Code comments and documentation describe **what things are now**, not what they used to be or how they changed. Never use phrases like "formerly", "was previously", "NOT X (see Y)", "changed from", or "used to be" in code or docs. A newcomer reading the code should understand everything without needing to know the project's history.
