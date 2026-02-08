@@ -15,16 +15,24 @@ Protocol overview:
 - BLE uses Cypress PSoC demo profile UUIDs (vendor reused generic UUIDs)
 - All devices advertise as "VisionAir" over BLE
 
-Packet types:
-- DEVICE_STATE (0x01): Device config, settings, and Remote sensor data
-- PROBE_SENSORS (0x03): Current probe temperature and humidity readings
-- SCHEDULE (0x02): Time slot configuration
-- REQUEST (0x10): Commands sent to device
-- SETTINGS (0x1a): Configuration changes
-- SETTINGS_ACK (0x23): Acknowledgment of settings
+Packet types (phone → device):
+- REQUEST (0x10): General-purpose command envelope. Used for both data queries (e.g.
+  "send me the current device state") and state changes (e.g. "set airflow to HIGH").
+  The specific operation is determined by the RequestParam byte. This is the primary
+  way the phone interacts with the device — most controls go through REQUEST.
+- SETTINGS (0x1a): Bulk configuration writes. Used for parameters that are sent as a
+  group (summer limit temperature, airflow volume bytes). Less commonly used than
+  REQUEST; the phone uses SETTINGS only for a few specific configuration changes.
 
-Note: The DEVICE_STATE packet temperatures (bytes 8/35/42) are often stale.
-Use PROBE_SENSORS packet or get_sensors() for accurate probe readings.
+Packet types (device → phone):
+- DEVICE_STATE (0x01): Device config, settings, and Remote humidity (182 bytes)
+- PROBE_SENSORS (0x03): Current probe temperature and humidity readings (182 bytes)
+- SCHEDULE (0x02): Time slot configuration + Remote temperature and humidity
+- SETTINGS_ACK (0x23): Acknowledgment of a SETTINGS write
+
+Remote temperature and humidity are in the SCHEDULE packet (type 0x02, byte 11 and 13).
+For accurate probe temperatures, use the PROBE_SENSORS packet or get_sensors().
+DEVICE_STATE bytes 35/42 are unreliable for probe readings.
 """
 
 from __future__ import annotations
@@ -128,12 +136,15 @@ PACKET_SIZE = 11  # Standard command packet size
 class PacketType:
     """Packet types (byte 2 in all packets)."""
 
+    # Device → phone (responses)
     DEVICE_STATE = 0x01         # Device config + Remote sensor (182 bytes)
     SCHEDULE = 0x02             # Time slot schedule data
     PROBE_SENSORS = 0x03        # Probe sensor readings (182 bytes)
-    REQUEST = 0x10              # Request command
-    SETTINGS = 0x1A             # Settings command
-    SETTINGS_ACK = 0x23         # Settings acknowledgment
+    SETTINGS_ACK = 0x23         # Acknowledgment of SETTINGS write
+
+    # Phone → device (commands)
+    REQUEST = 0x10              # General-purpose command (queries + state changes)
+    SETTINGS = 0x1A             # Bulk configuration write (summer limit, airflow bytes)
     SCHEDULE_WRITE = 0x40       # Schedule config write (55 bytes) — experimental
     SCHEDULE_CONFIG = 0x46      # Schedule config response (182 bytes) — experimental
     SCHEDULE_QUERY = 0x47       # Schedule query — experimental
@@ -141,18 +152,29 @@ class PacketType:
 
 
 class RequestParam:
-    """Request parameters (byte 5 in 0x10 request packets)."""
+    """REQUEST packet parameters (byte 5 in 0x10 packets).
 
-    DEVICE_STATE = 0x03         # Request device state + Remote sensor
-    FULL_DATA = 0x06            # Request all data (DEVICE_STATE + SCHEDULE + PROBE_SENSORS)
-    PROBE_SENSORS = 0x07        # Request probe sensor readings
-    SENSOR_SELECT = 0x18        # Set sensor cycle
-    BOOST = 0x19                # Activate BOOST
+    Each REQUEST packet carries a single parameter that determines the operation.
+    Some parameters query data (device responds with the requested packet type),
+    while others change device state (device responds with updated DEVICE_STATE).
+    """
+
+    # Queries — device responds with the requested data
+    DEVICE_STATE = 0x03         # Query device state + Remote sensor → DEVICE_STATE response
+    FULL_DATA = 0x06            # Query all data → DEVICE_STATE + SCHEDULE + PROBE_SENSORS
+    PROBE_SENSORS = 0x07        # Query probe sensor readings → PROBE_SENSORS response
+    SCHEDULE_QUERY = 0x26       # Query schedule → SCHEDULE_QUERY (0x47) response
+    SCHEDULE_CONFIG = 0x27      # Query schedule config → SCHEDULE_CONFIG (0x46) response
+    HOLIDAY_STATUS = 0x2C       # Query holiday status → HOLIDAY_STATUS (0x50) response
+
+    # Actions — device changes state and responds with updated DEVICE_STATE
+    SENSOR_SELECT = 0x18        # Select mode and fan speed (value: 0=LOW, 1=MEDIUM, 2=HIGH)
+    # Changes DEVICE_STATE bytes 34 (selector), 47 (indicator), 60,
+    # the physical fan speed, and the VMI remote display.
+    # The phone sends this when the user taps LOW/MEDIUM/HIGH fan buttons.
+    BOOST = 0x19                # Toggle boost (value: 0=OFF, 1=ON)
     HOLIDAY = 0x1A              # Set holiday days (byte 9 = days, 0=OFF)
-    SCHEDULE_TOGGLE = 0x1D      # Toggle time slots on/off (value: 0=OFF, 1=ON)
-    SCHEDULE_QUERY = 0x26       # Request schedule query (triggers 0x47 response)
-    SCHEDULE_CONFIG = 0x27      # Request schedule config (triggers 0x46 response)
-    HOLIDAY_STATUS = 0x2C       # Query holiday mode status
+    SCHEDULE_TOGGLE = 0x1D      # Toggle time slots (value: 0=OFF, 1=ON)
     PREHEAT = 0x2F              # Toggle preheat (value: 0=OFF, 1=ON)
 
 
@@ -190,25 +212,25 @@ class DeviceStateOffset:
     """Field offsets in device state packet (type 0x01, 182 bytes).
 
     This packet contains device configuration, settings, and Remote sensor data.
-    Probe temperatures here (bytes 35, 42) are often stale - use PROBE_SENSORS packet.
+    Probe temperatures at bytes 35/42 are unreliable — use PROBE_SENSORS packet instead.
     """
 
     TYPE = 2
     HUMIDITY = 4                # Humidity % from remote (1 byte)
     UNKNOWN_5_7 = 5             # Constant per device (3 bytes) - possibly device identifier
-    UNKNOWN_8 = 8               # Always 18 in captures - NOT live temp (see TEMP_ACTIVE)
+    UNKNOWN_8 = 8               # Always 18 in captures, purpose unknown
     CONFIGURED_VOLUME = 22      # 2 bytes, little-endian
     OPERATING_DAYS = 26         # 2 bytes, little-endian
     FILTER_DAYS = 28            # 2 bytes, little-endian
-    TEMP_ACTIVE = 32            # Live temp for selected sensor (per SENSOR_SELECTOR)
-    SENSOR_SELECTOR = 34        # Current sensor source (0/1/2)
-    TEMP_PROBE1 = 35            # Outlet temp (may be stale)
+    UNKNOWN_32 = 32             # Changes with sensor select (0x18), purpose unknown
+    SENSOR_SELECTOR = 34        # Sensor/mode selector: 0=Probe2/LOW, 1=Probe1/MEDIUM, 2=Remote/HIGH
+    TEMP_PROBE1 = 35            # Outlet temp (unreliable, use PROBE_SENSORS)
     SUMMER_LIMIT_TEMP = 38
-    TEMP_PROBE2 = 42            # Inlet temp (may be stale)
+    TEMP_PROBE2 = 42            # Inlet temp (unreliable, use PROBE_SENSORS)
     HOLIDAY_DAYS = 43            # Holiday days remaining (0=OFF)
     BOOST_ACTIVE = 44
-    AIRFLOW_INDICATOR = 47      # 38=low, 104=medium, 194=high
-    UNKNOWN_49 = 49                # Changed by firmware update; NOT preheat (see byte 53)
+    AIRFLOW_INDICATOR = 47      # 0x68=LOW, 0xc2=MEDIUM, 0x26=HIGH
+    UNKNOWN_49 = 49                # Purpose unknown
     SUMMER_LIMIT_ENABLED = 50
     PREHEAT_ENABLED = 53            # Preheat on/off (toggled via REQUEST param 0x2F)
     PREHEAT_TEMP = 56
@@ -224,12 +246,31 @@ class ProbeSensorOffset:
     FILTER_PERCENT = 13         # Filter remaining %
 
 
-class AirflowIndicator:
-    """Airflow indicator values (status byte 47)."""
+class ScheduleDataOffset:
+    """Field offsets in schedule data packet (type 0x02).
 
-    LOW = 38      # 0x26
-    MEDIUM = 104  # 0x68
-    HIGH = 194    # 0xC2
+    This packet is returned as part of the FULL_DATA_Q response sequence.
+    It contains Remote sensor readings (temperature and humidity from the
+    wireless RF remote control unit).
+    """
+
+    TYPE = 2
+    REMOTE_TEMP = 11            # Remote temperature (direct °C)
+    REMOTE_HUMIDITY = 13        # Remote humidity (direct %)
+
+
+class AirflowIndicator:
+    """Airflow indicator values (status byte 47).
+
+    Verified via controlled capture session (airflow_indicator_byte47_20260207):
+    REQUEST param 0x18 value=0 (LOW)    → byte[47] = 0x68
+    REQUEST param 0x18 value=1 (MEDIUM) → byte[47] = 0xc2
+    REQUEST param 0x18 value=2 (HIGH)   → byte[47] = 0x26
+    """
+
+    LOW = 104     # 0x68
+    MEDIUM = 194  # 0xC2
+    HIGH = 38     # 0x26
 
 
 # =============================================================================
@@ -301,7 +342,7 @@ class DeviceStatus:
     """Device state from DEVICE_STATE packet (type 0x01).
 
     Contains device configuration, settings, and Remote sensor readings.
-    Probe temperatures here are often stale - use SensorData from PROBE_SENSORS packet.
+    For reliable probe temperatures, use SensorData from PROBE_SENSORS packet.
 
     Fields with sensor metadata will be auto-discovered by the HA integration.
     """
@@ -376,7 +417,7 @@ class SensorData:
     """Probe sensor data from PROBE_SENSORS packet (type 0x03).
 
     Contains current/live temperature and humidity readings from probes.
-    The DEVICE_STATE packet (0x01) temperatures are often stale.
+    This is the reliable source for probe readings.
     """
 
     temp_probe1: int | None = field(default=None, metadata=sensor(
@@ -544,8 +585,8 @@ def build_full_data_request() -> bytes:
 
     This triggers the device to send a sequence of responses:
     - SETTINGS_ACK (0x23)
-    - DEVICE_STATE (0x01) - device config + Remote sensor
-    - SCHEDULE (0x02) - time slot configuration
+    - DEVICE_STATE (0x01) - device config + Remote humidity
+    - SCHEDULE (0x02) - Remote temperature (byte 11) and humidity (byte 13)
     - PROBE_SENSORS (0x03) - current probe readings
 
     This is the request pattern used by the VMI app for polling.
@@ -556,30 +597,33 @@ def build_full_data_request() -> bytes:
     return build_request(RequestParam.FULL_DATA, extended=True)
 
 
-def build_sensor_select_request(sensor: int) -> bytes:
-    """Build a request to get fresh data for a specific sensor.
+def build_sensor_select_request(mode: int) -> bytes:
+    """Build a mode select command packet (REQUEST param 0x18).
 
-    The response will have byte 34 (sensor_selector) matching the requested
-    sensor, and bytes 32/60 will contain fresh temperature/humidity.
-
-    To get fresh readings for all sensors, call this with 0, 1, and 2.
+    Sets the fan speed. The phone app sends this when the user taps the
+    LOW/MEDIUM/HIGH fan buttons.
 
     Args:
-        sensor: Sensor to read:
-            0 = Probe 2 (Air inlet)
-            1 = Probe 1 (Resistor outlet)
-            2 = Remote Control
+        mode: AirflowLevel.LOW (1), MEDIUM (2), or HIGH (3)
+              Maps to protocol values: LOW→0 (Probe2), MEDIUM→1 (Probe1), HIGH→2 (Remote)
 
     Returns:
         Complete packet bytes
 
     Raises:
-        ValueError: If sensor is not 0, 1, or 2
+        ValueError: If mode is not a valid AirflowLevel
     """
-    if sensor not in (0, 1, 2):
-        raise ValueError("sensor must be 0 (Probe2), 1 (Probe1), or 2 (Remote)")
-
-    return build_request(RequestParam.SENSOR_SELECT, value=sensor, extended=True)
+    mode_values = {
+        AirflowLevel.LOW: 0,
+        AirflowLevel.MEDIUM: 1,
+        AirflowLevel.HIGH: 2,
+    }
+    if mode not in mode_values:
+        raise ValueError(
+            f"Mode must be AirflowLevel.LOW ({AirflowLevel.LOW}), "
+            f"MEDIUM ({AirflowLevel.MEDIUM}), or HIGH ({AirflowLevel.HIGH})"
+        )
+    return build_request(RequestParam.SENSOR_SELECT, value=mode_values[mode], extended=True)
 
 
 def build_boost_command(enable: bool) -> bytes:
@@ -673,9 +717,8 @@ def _raise_special_mode_unsupported(feature: str, *, _experimental: bool) -> Non
     _require_experimental(_experimental, feature)
     raise ExperimentalFeatureError(
         f"{feature} encoding is unknown. "
-        "In legacy captures, byte 8 appeared to be a sequence counter and "
-        "bytes 9-10 were mode-specific. This SETTINGS-based path (byte7=0x04) "
-        "has not been observed in current captures. "
+        "The SETTINGS-based path (byte7=0x04) for this feature has not been "
+        "observed in captures. "
         "We cannot generate valid packets without the encoding algorithm."
     )
 
@@ -902,20 +945,12 @@ def parse_status(data: bytes) -> DeviceStatus | None:
         boost_active=data[DeviceStateOffset.BOOST_ACTIVE] == 0x01 if len(data) > DeviceStateOffset.BOOST_ACTIVE else False,
         sensor_selector=sensor_selector,
         sensor_name=sensor_name,
-        # Use live temperature from byte 32 only when that sensor is selected.
-        # DEVICE_STATE packet bytes 8/35/42 are stale - use get_sensors() for accurate readings.
-        temp_remote=(
-            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 2 and len(data) > DeviceStateOffset.TEMP_ACTIVE
-            else None
-        ),
-        temp_probe1=(
-            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 1 and len(data) > DeviceStateOffset.TEMP_ACTIVE
-            else None
-        ),
-        temp_probe2=(
-            data[DeviceStateOffset.TEMP_ACTIVE] if sensor_selector == 0 and len(data) > DeviceStateOffset.TEMP_ACTIVE
-            else None
-        ),
+        # Remote temperature is in the SCHEDULE packet (type 0x02), not here.
+        # Use parse_schedule_data() on the SCHEDULE response to get temp_remote.
+        # Probe temperatures: use get_sensors() / PROBE_SENSORS packet.
+        temp_remote=None,
+        temp_probe1=None,
+        temp_probe2=None,
         humidity_remote=humidity,
         filter_days=filter_days,
         operating_days=operating_days,
@@ -940,6 +975,33 @@ def parse_sensors(data: bytes) -> SensorData | None:
         humidity_probe1=data[ProbeSensorOffset.HUMIDITY_PROBE1] if len(data) > ProbeSensorOffset.HUMIDITY_PROBE1 else None,
         filter_percent=data[ProbeSensorOffset.FILTER_PERCENT] if len(data) > ProbeSensorOffset.FILTER_PERCENT else None,
     )
+
+
+def parse_schedule_data(data: bytes) -> tuple[int | None, int | None]:
+    """Parse Remote sensor data from SCHEDULE packet (type 0x02).
+
+    The SCHEDULE packet is returned as part of the FULL_DATA_Q response.
+    It contains the Remote sensor's temperature and humidity readings.
+
+    Args:
+        data: Raw packet bytes from SCHEDULE notification (182 bytes)
+
+    Returns:
+        Tuple of (remote_temp, remote_humidity), either may be None if invalid
+    """
+    if len(data) < 14 or data[:2] != MAGIC or data[ScheduleDataOffset.TYPE] != PacketType.SCHEDULE:
+        return (None, None)
+
+    temp = data[ScheduleDataOffset.REMOTE_TEMP]
+    humidity = data[ScheduleDataOffset.REMOTE_HUMIDITY]
+
+    # Sanity check: 0 or 255 likely means no data
+    if temp == 0 or temp == 255:
+        temp = None
+    if humidity == 0 or humidity == 255:
+        humidity = None
+
+    return (temp, humidity)
 
 
 def parse_schedule_config(data: bytes) -> ScheduleConfig | None:
