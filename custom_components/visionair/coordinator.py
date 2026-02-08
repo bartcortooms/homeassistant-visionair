@@ -44,7 +44,7 @@ class VisionAirCoordinator(DataUpdateCoordinator[DeviceStatus]):
     async def _async_update_data(self) -> DeviceStatus:
         """Fetch data from the device.
 
-        Uses get_fresh_status() which cycles through all sensors to get
+        Uses get_fresh_status() which sends three BLE requests to collect
         fresh temperature and humidity readings for all probes and the remote.
         """
         ble_device = bluetooth.async_ble_device_from_address(
