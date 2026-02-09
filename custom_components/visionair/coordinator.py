@@ -140,6 +140,22 @@ class VisionAirCoordinator(DataUpdateCoordinator[DeviceStatus]):
         except BleakError as err:
             raise UpdateFailed(f"Error setting holiday mode: {err}") from err
 
+    async def async_set_preheat_temperature(self, temperature: int) -> None:
+        """Set preheat temperature (14-22°C)."""
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, self.address, connectable=True
+        )
+        if not ble_device:
+            raise UpdateFailed(f"Device {self.address} not found")
+
+        try:
+            async with BleakClient(ble_device) as client:
+                visionair = VisionAirClient(client)
+                new_status = await visionair.set_preheat_temperature(temperature)
+                self.async_set_updated_data(new_status)
+        except BleakError as err:
+            raise UpdateFailed(f"Error setting preheat temperature: {err}") from err
+
     async def async_set_summer_limit(self, enabled: bool) -> None:
         """Set summer limit."""
         ble_device = bluetooth.async_ble_device_from_address(

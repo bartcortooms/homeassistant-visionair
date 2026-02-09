@@ -103,6 +103,9 @@
     "number": {
       "holiday_days": {
         "name": "Holiday mode"
+      },
+      "preheat_temperature": {
+        "name": "Preheat temperature"
       }
     },
     "switch": {

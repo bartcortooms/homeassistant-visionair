@@ -103,6 +103,9 @@
     "number": {
       "holiday_days": {
         "name": "Mode vacances"
+      },
+      "preheat_temperature": {
+        "name": "Température de préchauffage"
       }
     },
     "switch": {
