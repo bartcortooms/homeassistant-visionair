@@ -114,6 +114,9 @@
       },
       "summer_limit": {
         "name": "Summer limit"
+      },
+      "boost": {
+        "name": "Boost"
       }
     }
   }

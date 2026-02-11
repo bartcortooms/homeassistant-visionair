@@ -42,6 +42,13 @@ SWITCH_DESCRIPTIONS: tuple[VisionAirSwitchEntityDescription, ...] = (
         turn_on_fn=lambda coord: coord.async_set_summer_limit(True),
         turn_off_fn=lambda coord: coord.async_set_summer_limit(False),
     ),
+    VisionAirSwitchEntityDescription(
+        key="boost",
+        translation_key="boost",
+        value_fn=lambda data: data.boost_active,
+        turn_on_fn=lambda coord: coord.async_set_boost(True),
+        turn_off_fn=lambda coord: coord.async_set_boost(False),
+    ),
 )
 
 
