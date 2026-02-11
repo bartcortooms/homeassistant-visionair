@@ -8,7 +8,6 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .coordinator import VisionAirCoordinator
@@ -42,15 +41,6 @@ async def async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None
     new_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
     coordinator.update_interval = timedelta(seconds=new_interval)
     _LOGGER.debug("Update interval changed to %s seconds", new_interval)
-
-
-async def async_remove_config_entry_device(
-    hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry
-) -> bool:
-    """Allow removal of devices not owned by this integration."""
-    return not device_entry.identifiers.intersection(
-        {(DOMAIN, entry.data[CONF_ADDRESS])}
-    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
