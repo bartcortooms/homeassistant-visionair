@@ -32,7 +32,15 @@
   "entity": {
     "fan": {
       "visionair": {
-        "name": "Ventilation"
+        "name": "Ventilation",
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "none": "Normal",
+              "boost": "Boost"
+            }
+          }
+        }
       }
     },
     "sensor": {
@@ -114,9 +122,6 @@
       },
       "summer_limit": {
         "name": "Summer limit"
-      },
-      "boost": {
-        "name": "Boost"
       }
     }
   }

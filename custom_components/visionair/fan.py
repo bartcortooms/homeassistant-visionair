@@ -57,7 +57,8 @@ class VisionAirFan(CoordinatorEntity[VisionAirCoordinator], FanEntity):
     """Representation of a VisionAir ventilation fan."""
 
     _attr_has_entity_name = True
-    _attr_name = None  # Use device name
+    _attr_name = None
+    _attr_translation_key = "visionair"
     _attr_supported_features = (
         FanEntityFeature.SET_SPEED
         | FanEntityFeature.PRESET_MODE
