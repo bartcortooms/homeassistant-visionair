@@ -12,6 +12,7 @@ from .visionair_ble import VisionAirClient, DeviceStatus
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
@@ -74,101 +75,54 @@ class VisionAirCoordinator(DataUpdateCoordinator[DeviceStatus]):
         except TimeoutError as err:
             raise UpdateFailed(f"Timeout communicating with device: {err}") from err
 
-    async def async_set_airflow_mode(self, mode: str) -> None:
-        """Set the airflow mode."""
+    async def _async_send_command(self, action: str, command) -> None:
+        """Send a command to the device and update coordinator data."""
         ble_device = bluetooth.async_ble_device_from_address(
             self.hass, self.address, connectable=True
         )
         if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
+            raise HomeAssistantError(f"Device {self.address} not found")
 
         try:
             async with BleakClient(ble_device) as client:
                 visionair = VisionAirClient(client)
-                # Use returned status directly instead of separate refresh
-                new_status = await visionair.set_airflow_mode(mode)
+                new_status = await command(visionair)
                 self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting airflow mode: {err}") from err
+        except (BleakError, TimeoutError) as err:
+            raise HomeAssistantError(f"Error {action}: {err}") from err
+
+    async def async_set_airflow_mode(self, mode: str) -> None:
+        """Set the airflow mode."""
+        await self._async_send_command(
+            "setting airflow mode", lambda v: v.set_airflow_mode(mode)
+        )
 
     async def async_set_boost(self, enable: bool) -> None:
         """Enable or disable boost mode."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
+        await self._async_send_command(
+            "setting boost", lambda v: v.set_boost(enable)
         )
-        if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
-
-        try:
-            async with BleakClient(ble_device) as client:
-                visionair = VisionAirClient(client)
-                # Use returned status directly instead of separate refresh
-                new_status = await visionair.set_boost(enable)
-                self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting boost: {err}") from err
 
     async def async_set_preheat(self, enabled: bool) -> None:
         """Set preheat on/off."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
+        await self._async_send_command(
+            "setting preheat", lambda v: v.set_preheat(enabled)
         )
-        if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
-
-        try:
-            async with BleakClient(ble_device) as client:
-                visionair = VisionAirClient(client)
-                new_status = await visionair.set_preheat(enabled)
-                self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting preheat: {err}") from err
 
     async def async_set_holiday(self, days: int) -> None:
         """Set holiday mode duration (0 to disable)."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
+        await self._async_send_command(
+            "setting holiday mode", lambda v: v.set_holiday(days)
         )
-        if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
-
-        try:
-            async with BleakClient(ble_device) as client:
-                visionair = VisionAirClient(client)
-                new_status = await visionair.set_holiday(days)
-                self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting holiday mode: {err}") from err
 
     async def async_set_preheat_temperature(self, temperature: int) -> None:
         """Set preheat temperature (14-22°C)."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
+        await self._async_send_command(
+            "setting preheat temperature", lambda v: v.set_preheat_temperature(temperature)
         )
-        if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
-
-        try:
-            async with BleakClient(ble_device) as client:
-                visionair = VisionAirClient(client)
-                new_status = await visionair.set_preheat_temperature(temperature)
-                self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting preheat temperature: {err}") from err
 
     async def async_set_summer_limit(self, enabled: bool) -> None:
         """Set summer limit."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
+        await self._async_send_command(
+            "setting summer limit", lambda v: v.set_summer_limit(enabled)
         )
-        if not ble_device:
-            raise UpdateFailed(f"Device {self.address} not found")
-
-        try:
-            async with BleakClient(ble_device) as client:
-                visionair = VisionAirClient(client)
-                # Use returned status directly instead of separate refresh
-                new_status = await visionair.set_summer_limit(enabled)
-                self.async_set_updated_data(new_status)
-        except BleakError as err:
-            raise UpdateFailed(f"Error setting summer limit: {err}") from err
