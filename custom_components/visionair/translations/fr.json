@@ -122,6 +122,9 @@
       },
       "summer_limit": {
         "name": "Limite été"
+      },
+      "boost": {
+        "name": "Boost"
       }
     }
   }
